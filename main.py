@@ -1,0 +1,273 @@
+"""
+Entry point — SEMI-auto mode with async terminal menu.
+
+Initialization order:
+  1. os.makedirs(".tokens", exist_ok=True)
+  2. client = SaxoClient()  →  OAuth (reuse / refresh / re-auth)
+  3. await client.upgrade_session()
+  4. asyncio.create_task(client.token_refresh_loop())
+  5. asyncio.create_task(client.poll_session_capability())
+  6. Enter main menu loop
+"""
+
+import asyncio
+import os
+import sys
+
+# Ensure the package root is on sys.path so imports resolve
+sys.path.insert(0, os.path.dirname(__file__))
+
+from aioconsole import ainput
+
+from config import ENV, MODE, COMMISSION_ROUND_TRIP
+from client.saxo_client import SaxoClient
+from api.account import get_me, get_balance, get_positions
+from api.market_data import search_instrument, get_quote
+from api.orders import place_order, get_open_orders, cancel_order
+
+BANNER = f"""
+========================================
+ SAXO BOT — {ENV} Environment
+========================================
+[1] Account balance & positions
+[2] Get live quote (search → quote)
+[3] Manual order entry
+[4] View open orders / cancel an order
+[5] Refresh Session Capability now
+[0] Exit
+========================================"""
+
+
+# ── Menu handlers ───────────────────────────────────────────────────────
+
+
+async def _handle_balance(client: SaxoClient, ctx: dict) -> None:
+    await get_balance(client)
+    await get_positions(client)
+
+
+async def _handle_quote(client: SaxoClient, ctx: dict) -> None:
+    keyword = (await ainput("  Ticker / keyword to search: ")).strip()
+    if not keyword:
+        return
+
+    asset_type = (
+        await ainput("  AssetType [Stock/Etf/StockOption] (default=Stock): ")
+    ).strip() or "Stock"
+
+    instruments = await search_instrument(client, keyword, asset_type)
+    if not instruments:
+        print("[INFO] No instruments found.")
+        return
+
+    uic_input = (await ainput("  Enter UIC to quote (or blank to skip): ")).strip()
+    if not uic_input:
+        return
+
+    try:
+        uic = int(uic_input)
+    except ValueError:
+        print("[ERROR] UIC must be a number.")
+        return
+
+    await get_quote(client, uic, asset_type)
+
+
+async def _handle_order(client: SaxoClient, ctx: dict) -> None:
+    account_key = ctx.get("account_key", "")
+    if not account_key:
+        print("[ERROR] AccountKey not available. Ensure get_me succeeded.")
+        return
+
+    # 1. Search for instrument
+    keyword = (await ainput("  Ticker / keyword: ")).strip()
+    if not keyword:
+        return
+
+    asset_type = (
+        await ainput("  AssetType [Stock/Etf/StockOption] (default=Stock): ")
+    ).strip() or "Stock"
+
+    instruments = await search_instrument(client, keyword, asset_type)
+    if not instruments:
+        print("[INFO] No instruments found.")
+        return
+
+    uic_input = (await ainput("  Enter UIC for order: ")).strip()
+    if not uic_input:
+        return
+    try:
+        uic = int(uic_input)
+    except ValueError:
+        print("[ERROR] UIC must be a number.")
+        return
+
+    # 2. Get a quote so the user knows current price
+    quote_data = await get_quote(client, uic, asset_type)
+    ask = quote_data.get("Quote", {}).get("Ask")
+    desc = quote_data.get("DisplayAndFormat", {}).get("Description", "?")
+
+    # 3. Order parameters
+    direction = (
+        await ainput("  Buy or Sell [Buy/Sell] (default=Buy): ")
+    ).strip() or "Buy"
+    if direction not in ("Buy", "Sell"):
+        print("[ERROR] Must be 'Buy' or 'Sell'.")
+        return
+
+    amount_str = (await ainput("  Quantity (default=1): ")).strip() or "1"
+    try:
+        amount = float(amount_str)
+    except ValueError:
+        print("[ERROR] Quantity must be a number.")
+        return
+
+    order_type = (
+        await ainput("  OrderType [Market/Limit] (default=Market): ")
+    ).strip() or "Market"
+
+    limit_price = None
+    if order_type == "Limit":
+        lp_str = (await ainput("  Limit price: ")).strip()
+        try:
+            limit_price = float(lp_str)
+        except ValueError:
+            print("[ERROR] Limit price must be a number.")
+            return
+
+    # 4. Estimate premium
+    est_price = limit_price if limit_price else (ask if ask else 0)
+    est_premium = est_price * amount if est_price else 0
+    total_cost = est_premium + COMMISSION_ROUND_TRIP
+
+    # 5. Confirm in SEMI mode
+    print("\n  ── Order Summary ──────────────────")
+    print(f"  Instrument : {desc}")
+    print(f"  Direction  : {direction}")
+    print(f"  Quantity   : {amount}")
+    print(f"  Type       : {order_type}")
+    if limit_price:
+        print(f"  Limit Price: ${limit_price:.2f}")
+    if ask:
+        print(f"  Ask Price  : ${ask:.4f}")
+    print(f"  Est. Premium: ${est_premium:.2f}")
+    print(f"  Commission : ${COMMISSION_ROUND_TRIP:.2f}")
+    print(f"  Total Cost : ${total_cost:.2f}")
+    print("  ───────────────────────────────────")
+
+    if MODE == "SEMI":
+        confirm = (await ainput("  Place this order? (y/N): ")).strip().lower()
+        if confirm != "y":
+            print("[ORDER] Cancelled by user.")
+            return
+
+    try:
+        await place_order(
+            client,
+            account_key=account_key,
+            uic=uic,
+            asset_type=asset_type,
+            buy_sell=direction,
+            order_type=order_type,
+            amount=amount,
+            limit_price=limit_price,
+            estimated_premium=est_premium,
+            description=desc,
+        )
+    except ValueError as exc:
+        print(f"[ERROR] {exc}")
+
+
+async def _handle_open_orders(client: SaxoClient, ctx: dict) -> None:
+    account_key = ctx.get("account_key", "")
+    orders = await get_open_orders(client, account_key=account_key or None)
+    if not orders:
+        return
+
+    oid = (await ainput("  Enter OrderId to cancel (or blank to skip): ")).strip()
+    if not oid:
+        return
+
+    if not account_key:
+        print("[ERROR] AccountKey not available.")
+        return
+
+    confirm = (await ainput(f"  Cancel order {oid}? (y/N): ")).strip().lower()
+    if confirm == "y":
+        await cancel_order(client, oid, account_key)
+    else:
+        print("[ORDER] Cancel aborted.")
+
+
+async def _handle_session_refresh(client: SaxoClient, ctx: dict) -> None:
+    await client.upgrade_session()
+
+
+# ── Main loop ───────────────────────────────────────────────────────────
+
+MENU_DISPATCH = {
+    "1": _handle_balance,
+    "2": _handle_quote,
+    "3": _handle_order,
+    "4": _handle_open_orders,
+    "5": _handle_session_refresh,
+}
+
+
+async def main() -> None:
+    # 1. Ensure token directory
+    os.makedirs(".tokens", exist_ok=True)
+
+    # 2. Initialise client (OAuth)
+    client = SaxoClient()
+    await client.init()
+
+    # 3. Upgrade session to FullTradingAndChat
+    await client.upgrade_session()
+
+    # 4–5. Background tasks
+    refresh_task = asyncio.create_task(client.token_refresh_loop())
+    poll_task = asyncio.create_task(client.poll_session_capability())
+
+    # Fetch user info for AccountKey
+    ctx: dict = {}
+    try:
+        user = await get_me(client)
+        ctx["client_key"] = user.get("ClientKey", "")
+        # Derive default AccountKey from user
+        accounts = user.get("LegalAssetTypes") or []  # just for info
+        # Get default account key from /port/v1/accounts/me
+        acct_resp = await client.get("/port/v1/accounts/me")
+        if acct_resp.status_code == 200:
+            acct_data = acct_resp.json()
+            acct_list = acct_data.get("Data", [])
+            if acct_list:
+                ctx["account_key"] = acct_list[0].get("AccountKey", "")
+                print(f"[INFO] Default AccountKey: {ctx['account_key']}")
+    except Exception as exc:
+        print(f"[ERROR] Failed to fetch user info: {exc}")
+
+    # 6. Menu loop
+    print(BANNER)
+    try:
+        while True:
+            choice = (await ainput("\nSelect [0-5]: ")).strip()
+            if choice == "0":
+                print("[INFO] Shutting down …")
+                break
+            handler = MENU_DISPATCH.get(choice)
+            if handler:
+                try:
+                    await handler(client, ctx)
+                except Exception as exc:
+                    print(f"[ERROR] {exc}")
+            else:
+                print("[ERROR] Invalid choice. Enter 0–5.")
+    finally:
+        refresh_task.cancel()
+        poll_task.cancel()
+        await client.close()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
