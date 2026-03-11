@@ -95,7 +95,7 @@ async def _pick_option_uic(client: SaxoClient, root_id: int) -> int | None:
         print("[ERROR] Must be a number.")
         return None
 
-    strikes = list_strikes(option_space, exp_idx)
+    strikes = await list_strikes(option_space, exp_idx)
     if not strikes:
         return None
 

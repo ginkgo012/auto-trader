@@ -9,6 +9,8 @@ Endpoints:
 
 from __future__ import annotations
 
+import asyncio
+
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -148,9 +150,15 @@ async def get_option_chain(
     return data
 
 
-def list_strikes(option_space: list[dict], expiry_index: int) -> list[dict]:
+async def list_strikes(
+    option_space: list[dict],
+    expiry_index: int,
+    page_size: int = 20,
+) -> list[dict]:
     """
-    Print and return the strikes for a given expiry index.
+    Print and return the strikes for a given expiry index, paginated.
+    Pagination prevents errno 35 (EAGAIN) caused by aioconsole's
+    non-blocking stdout being overwhelmed by large option chain output.
     Each entry has PutCall, StrikePrice, and Uic.
     Groups by StrikePrice to show Call/Put side by side.
     """
@@ -176,13 +184,30 @@ def list_strikes(option_space: list[dict], expiry_index: int) -> list[dict]:
         if pc in ("Call", "Put"):
             strikes_map[sp][pc] = uic
 
-    print(f"[INFO] Strikes for expiry {expiry}: {len(strikes_map)}")
-    for sp in sorted(strikes_map):
-        call_uic = strikes_map[sp]["Call"]
-        put_uic = strikes_map[sp]["Put"]
-        print(
-            f"       Strike {sp:>10} | "
-            f"Call UIC={str(call_uic or '-'):>8} | "
-            f"Put  UIC={str(put_uic or '-'):>8}"
-        )
+    sorted_strikes = sorted(strikes_map.items())
+    total = len(sorted_strikes)
+    print(f"[INFO] Strikes for expiry {expiry}: {total} (showing {page_size} per page)")
+
+    # Paginate — yield to event loop between pages to avoid EAGAIN
+    for start in range(0, total, page_size):
+        page = sorted_strikes[start : start + page_size]
+        for sp, sides in page:
+            call_uic = sides["Call"]
+            put_uic = sides["Put"]
+            print(
+                f"       Strike {sp:>10} | "
+                f"Call UIC={str(call_uic or '-'):>8} | "
+                f"Put  UIC={str(put_uic or '-'):>8}"
+            )
+        await asyncio.sleep(0)  # yield to event loop to drain stdout buffer
+        end = min(start + page_size, total)
+        if end < total:
+            try:
+                from aioconsole import ainput  # local import to avoid hard dep
+                cont = (await ainput(f"  -- {end}/{total} shown. Enter to continue, 's' to stop: ")).strip()
+                if cont.lower() == "s":
+                    break
+            except ImportError:
+                await asyncio.sleep(0)
+
     return options
