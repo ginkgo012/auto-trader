@@ -37,6 +37,35 @@ BANNER = f"""
 [0] Exit
 ========================================"""
 
+ASSET_TYPE_MENU = """
+  ── Asset Type ──────────────────
+  [1] Stock
+  [2] Etf
+  [3] StockOption
+  [4] StockIndexOption
+  [b] Back
+  ────────────────────────────────"""
+
+_ASSET_TYPE_CHOICES = {
+    "1": "Stock",
+    "2": "Etf",
+    "3": "StockOption",
+    "4": "StockIndexOption",
+}
+
+
+async def _pick_asset_type() -> str | None:
+    """Show numbered menu and return asset type, or None to go back."""
+    print(ASSET_TYPE_MENU)
+    choice = (await ainput("  Select asset type [1-4] (default=1, 'b' to go back): ")).strip()
+    if choice.lower() == "b":
+        return None
+    at = _ASSET_TYPE_CHOICES.get(choice or "1")
+    if at is None:
+        print("[ERROR] Invalid choice. Pick 1-4.")
+        return None
+    return at
+
 
 # ── Menu handlers ───────────────────────────────────────────────────────
 
@@ -88,13 +117,8 @@ async def _handle_quote(client: SaxoClient, ctx: dict) -> None:
     if not keyword:
         return
 
-    asset_type = (
-        await ainput(
-            "  AssetType [Stock/Etf/StockOption/StockIndexOption] (default=Stock, 'b' to go back): "
-        )
-    ).strip() or "Stock"
-    if asset_type.lower() == "b":
-        print("[INFO] Going back to main menu.")
+    asset_type = await _pick_asset_type()
+    if asset_type is None:
         return
 
     instruments = await search_instrument(client, keyword, asset_type)
@@ -151,13 +175,8 @@ async def _handle_order(client: SaxoClient, ctx: dict) -> None:
     if not keyword:
         return
 
-    asset_type = (
-        await ainput(
-            "  AssetType [Stock/Etf/StockOption/StockIndexOption] (default=Stock, 'b' to go back): "
-        )
-    ).strip() or "Stock"
-    if asset_type.lower() == "b":
-        print("[INFO] Going back to main menu.")
+    asset_type = await _pick_asset_type()
+    if asset_type is None:
         return
 
     instruments = await search_instrument(client, keyword, asset_type)

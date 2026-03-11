@@ -15,6 +15,23 @@ if TYPE_CHECKING:
     from client.saxo_client import SaxoClient
 
 
+# ── Asset type normalization ─────────────────────────────────────────────
+
+_ASSET_TYPE_MAP = {
+    "stock": "Stock",
+    "etf": "Etf",
+    "stockoption": "StockOption",
+    "stockindexoption": "StockIndexOption",
+    "cfdonstock": "CfdOnStock",
+    "fxspot": "FxSpot",
+}
+
+
+def normalize_asset_type(raw: str) -> str:
+    """Case-insensitive normalization of asset type input."""
+    return _ASSET_TYPE_MAP.get(raw.strip().lower(), raw.strip())
+
+
 # ── Instrument search ───────────────────────────────────────────────────
 
 
@@ -103,15 +120,18 @@ async def get_option_chain(
     Fetch the option chain for a given OptionRootId.
 
     option_root_id: obtained from a prior instrument search with
-                    AssetType = "StockOption"
+                    AssetType = "StockOption" or "StockIndexOption"
     expiry_dates:   optional comma-separated ISO dates, e.g. "2026-04-17"
     """
-    params: dict[str, str] = {"OptionRootId": str(option_root_id)}
+    params: dict[str, str] = {}
     if expiry_dates:
         params["ExpiryDates"] = expiry_dates
+        params["OptionSpaceSegment"] = "SpecificDates"
+    else:
+        params["OptionSpaceSegment"] = "AllDates"
 
     resp = await client.get(
-        "/ref/v1/instruments/contractoptionspaces",
+        f"/ref/v1/instruments/contractoptionspaces/{option_root_id}",
         params=params,
     )
     resp.raise_for_status()
@@ -121,34 +141,48 @@ async def get_option_chain(
     print(f"[INFO] Option chain for root {option_root_id}: "
           f"{len(option_space)} expiry groups")
     for i, group in enumerate(option_space):
-        expiry = group.get("Expiry", {}).get("ExpiryDate", "?")
+        expiry = group.get("Expiry", group.get("DisplayExpiry", "?"))
         strikes = group.get("SpecificOptions", [])
-        print(f"  [{i}] Expiry {expiry}: {len(strikes)} strikes")
+        tag = f"{len(strikes)} strikes" if strikes else "no strikes loaded"
+        print(f"  [{i}] Expiry {expiry} — {tag}")
     return data
 
 
 def list_strikes(option_space: list[dict], expiry_index: int) -> list[dict]:
     """
     Print and return the strikes for a given expiry index.
-    Each strike has a Call and/or Put side with its own UIC.
+    Each entry has PutCall, StrikePrice, and Uic.
+    Groups by StrikePrice to show Call/Put side by side.
     """
     if expiry_index < 0 or expiry_index >= len(option_space):
         print("[ERROR] Invalid expiry index.")
         return []
 
     group = option_space[expiry_index]
-    expiry = group.get("Expiry", {}).get("ExpiryDate", "?")
-    strikes = group.get("SpecificOptions", [])
-    print(f"[INFO] Strikes for expiry {expiry}: {len(strikes)}")
-    for s in strikes:
-        strike_val = s.get("Strike", "?")
-        call = s.get("Call", {})
-        put = s.get("Put", {})
-        call_uic = call.get("Uic", "-")
-        put_uic = put.get("Uic", "-")
+    expiry = group.get("Expiry", group.get("DisplayExpiry", "?"))
+    options = group.get("SpecificOptions", [])
+    if not options:
+        print(f"[INFO] No strikes loaded for expiry {expiry}.")
+        return []
+
+    # Group by strike price: each strike may have a Call and/or Put entry
+    strikes_map: dict[float, dict[str, int | None]] = {}
+    for opt in options:
+        sp = opt.get("StrikePrice", 0)
+        pc = opt.get("PutCall", "")
+        uic = opt.get("Uic")
+        if sp not in strikes_map:
+            strikes_map[sp] = {"Call": None, "Put": None}
+        if pc in ("Call", "Put"):
+            strikes_map[sp][pc] = uic
+
+    print(f"[INFO] Strikes for expiry {expiry}: {len(strikes_map)}")
+    for sp in sorted(strikes_map):
+        call_uic = strikes_map[sp]["Call"]
+        put_uic = strikes_map[sp]["Put"]
         print(
-            f"       Strike {strike_val:>10} | "
-            f"Call UIC={str(call_uic):>8} | "
-            f"Put  UIC={str(put_uic):>8}"
+            f"       Strike {sp:>10} | "
+            f"Call UIC={str(call_uic or '-'):>8} | "
+            f"Put  UIC={str(put_uic or '-'):>8}"
         )
-    return strikes
+    return options
