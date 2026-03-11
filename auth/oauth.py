@@ -90,7 +90,7 @@ async def exchange_code_for_token(code: str) -> dict:
             },
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
-    if resp.status_code != 200:
+    if resp.status_code // 100 != 2:
         raise RuntimeError(
             f"[AUTH] Token exchange failed ({resp.status_code}): {resp.text}"
         )
@@ -116,7 +116,7 @@ async def refresh_access_token(token_data: dict) -> dict:
             },
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
-    if resp.status_code != 200:
+    if resp.status_code // 100 != 2:
         raise RuntimeError(
             f"[AUTH] Token refresh failed ({resp.status_code}): {resp.text}"
         )

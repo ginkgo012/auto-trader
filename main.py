@@ -47,20 +47,33 @@ async def _handle_balance(client: SaxoClient, ctx: dict) -> None:
 
 
 async def _handle_quote(client: SaxoClient, ctx: dict) -> None:
-    keyword = (await ainput("  Ticker / keyword to search: ")).strip()
+    keyword = (await ainput("  Ticker / keyword to search (or 'b' to go back): ")).strip()
+    if keyword.lower() == "b":
+        print("[INFO] Going back to main menu.")
+        return
     if not keyword:
         return
 
     asset_type = (
-        await ainput("  AssetType [Stock/Etf/StockOption] (default=Stock): ")
+        await ainput(
+            "  AssetType [Stock/Etf/StockOption/StockIndexOption] (default=Stock, 'b' to go back): "
+        )
     ).strip() or "Stock"
+    if asset_type.lower() == "b":
+        print("[INFO] Going back to main menu.")
+        return
 
     instruments = await search_instrument(client, keyword, asset_type)
     if not instruments:
         print("[INFO] No instruments found.")
         return
 
-    uic_input = (await ainput("  Enter UIC to quote (or blank to skip): ")).strip()
+    uic_input = (
+        await ainput("  Enter UIC to quote (blank to skip, 'b' to go back): ")
+    ).strip()
+    if uic_input.lower() == "b":
+        print("[INFO] Going back to main menu.")
+        return
     if not uic_input:
         return
 
@@ -80,20 +93,31 @@ async def _handle_order(client: SaxoClient, ctx: dict) -> None:
         return
 
     # 1. Search for instrument
-    keyword = (await ainput("  Ticker / keyword: ")).strip()
+    keyword = (await ainput("  Ticker / keyword (or 'b' to go back): ")).strip()
+    if keyword.lower() == "b":
+        print("[INFO] Going back to main menu.")
+        return
     if not keyword:
         return
 
     asset_type = (
-        await ainput("  AssetType [Stock/Etf/StockOption] (default=Stock): ")
+        await ainput(
+            "  AssetType [Stock/Etf/StockOption/StockIndexOption] (default=Stock, 'b' to go back): "
+        )
     ).strip() or "Stock"
+    if asset_type.lower() == "b":
+        print("[INFO] Going back to main menu.")
+        return
 
     instruments = await search_instrument(client, keyword, asset_type)
     if not instruments:
         print("[INFO] No instruments found.")
         return
 
-    uic_input = (await ainput("  Enter UIC for order: ")).strip()
+    uic_input = (await ainput("  Enter UIC for order (or 'b' to go back): ")).strip()
+    if uic_input.lower() == "b":
+        print("[INFO] Going back to main menu.")
+        return
     if not uic_input:
         return
     try:
@@ -108,27 +132,42 @@ async def _handle_order(client: SaxoClient, ctx: dict) -> None:
     desc = quote_data.get("DisplayAndFormat", {}).get("Description", "?")
 
     # 3. Order parameters
-    direction = (
-        await ainput("  Buy or Sell [Buy/Sell] (default=Buy): ")
-    ).strip() or "Buy"
+    direction_input = (
+        await ainput("  Buy or Sell [Buy/Sell] (default=Buy, 'b' to go back): ")
+    ).strip()
+    if direction_input.lower() == "b":
+        print("[INFO] Going back to main menu.")
+        return
+    direction = direction_input or "Buy"
     if direction not in ("Buy", "Sell"):
         print("[ERROR] Must be 'Buy' or 'Sell'.")
         return
 
-    amount_str = (await ainput("  Quantity (default=1): ")).strip() or "1"
+    amount_str = (await ainput("  Quantity (default=1, 'b' to go back): ")).strip()
+    if amount_str.lower() == "b":
+        print("[INFO] Going back to main menu.")
+        return
+    amount_str = amount_str or "1"
     try:
         amount = float(amount_str)
     except ValueError:
         print("[ERROR] Quantity must be a number.")
         return
 
-    order_type = (
-        await ainput("  OrderType [Market/Limit] (default=Market): ")
-    ).strip() or "Market"
+    order_type_input = (
+        await ainput("  OrderType [Market/Limit] (default=Market, 'b' to go back): ")
+    ).strip()
+    if order_type_input.lower() == "b":
+        print("[INFO] Going back to main menu.")
+        return
+    order_type = order_type_input or "Market"
 
     limit_price = None
     if order_type == "Limit":
-        lp_str = (await ainput("  Limit price: ")).strip()
+        lp_str = (await ainput("  Limit price (or 'b' to go back): ")).strip()
+        if lp_str.lower() == "b":
+            print("[INFO] Going back to main menu.")
+            return
         try:
             limit_price = float(lp_str)
         except ValueError:
@@ -156,7 +195,12 @@ async def _handle_order(client: SaxoClient, ctx: dict) -> None:
     print("  ───────────────────────────────────")
 
     if MODE == "SEMI":
-        confirm = (await ainput("  Place this order? (y/N): ")).strip().lower()
+        confirm = (
+            await ainput("  Place this order? (y/N, 'b' to go back): ")
+        ).strip().lower()
+        if confirm == "b":
+            print("[INFO] Going back to main menu.")
+            return
         if confirm != "y":
             print("[ORDER] Cancelled by user.")
             return
@@ -184,7 +228,14 @@ async def _handle_open_orders(client: SaxoClient, ctx: dict) -> None:
     if not orders:
         return
 
-    oid = (await ainput("  Enter OrderId to cancel (or blank to skip): ")).strip()
+    oid = (
+        await ainput(
+            "  Enter OrderId to cancel (blank to skip, 'b' to go back): "
+        )
+    ).strip()
+    if oid.lower() == "b":
+        print("[INFO] Going back to main menu.")
+        return
     if not oid:
         return
 
@@ -192,7 +243,12 @@ async def _handle_open_orders(client: SaxoClient, ctx: dict) -> None:
         print("[ERROR] AccountKey not available.")
         return
 
-    confirm = (await ainput(f"  Cancel order {oid}? (y/N): ")).strip().lower()
+    confirm = (
+        await ainput(f"  Cancel order {oid}? (y/N, 'b' to go back): ")
+    ).strip().lower()
+    if confirm == "b":
+        print("[INFO] Going back to main menu.")
+        return
     if confirm == "y":
         await cancel_order(client, oid, account_key)
     else:
