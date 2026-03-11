@@ -22,7 +22,7 @@ from aioconsole import ainput
 from config import ENV, MODE, COMMISSION_ROUND_TRIP
 from client.saxo_client import SaxoClient
 from api.account import get_me, get_balance, get_positions
-from api.market_data import search_instrument, get_quote
+from api.market_data import search_instrument, get_quote, get_option_chain, list_strikes
 from api.orders import place_order, get_open_orders, cancel_order
 
 BANNER = f"""
@@ -44,6 +44,40 @@ BANNER = f"""
 async def _handle_balance(client: SaxoClient, ctx: dict) -> None:
     await get_balance(client)
     await get_positions(client)
+
+
+async def _pick_option_uic(client: SaxoClient, root_id: int) -> int | None:
+    """
+    Drill into an option chain: pick expiry → pick strike → return the UIC.
+    Returns None if the user cancels at any step.
+    """
+    chain = await get_option_chain(client, root_id)
+    option_space = chain.get("OptionSpace", [])
+    if not option_space:
+        print("[INFO] No option chain data available for this root.")
+        return None
+
+    exp_input = (await ainput("  Select expiry index (or 'b' to go back): ")).strip()
+    if exp_input.lower() == "b" or not exp_input:
+        return None
+    try:
+        exp_idx = int(exp_input)
+    except ValueError:
+        print("[ERROR] Must be a number.")
+        return None
+
+    strikes = list_strikes(option_space, exp_idx)
+    if not strikes:
+        return None
+
+    uic_input = (await ainput("  Enter the Call or Put UIC (or 'b' to go back): ")).strip()
+    if uic_input.lower() == "b" or not uic_input:
+        return None
+    try:
+        return int(uic_input)
+    except ValueError:
+        print("[ERROR] UIC must be a number.")
+        return None
 
 
 async def _handle_quote(client: SaxoClient, ctx: dict) -> None:
@@ -68,20 +102,37 @@ async def _handle_quote(client: SaxoClient, ctx: dict) -> None:
         print("[INFO] No instruments found.")
         return
 
-    uic_input = (
-        await ainput("  Enter UIC to quote (blank to skip, 'b' to go back): ")
-    ).strip()
-    if uic_input.lower() == "b":
-        print("[INFO] Going back to main menu.")
-        return
-    if not uic_input:
-        return
+    is_option = asset_type in ("StockOption", "StockIndexOption")
 
-    try:
-        uic = int(uic_input)
-    except ValueError:
-        print("[ERROR] UIC must be a number.")
-        return
+    if is_option:
+        # For options, the Identifier is an OptionRootId — drill into chain
+        root_input = (
+            await ainput("  Enter OptionRootId to browse chain (or 'b' to go back): ")
+        ).strip()
+        if root_input.lower() == "b" or not root_input:
+            return
+        try:
+            root_id = int(root_input)
+        except ValueError:
+            print("[ERROR] Must be a number.")
+            return
+        uic = await _pick_option_uic(client, root_id)
+        if uic is None:
+            return
+    else:
+        uic_input = (
+            await ainput("  Enter UIC to quote (blank to skip, 'b' to go back): ")
+        ).strip()
+        if uic_input.lower() == "b":
+            print("[INFO] Going back to main menu.")
+            return
+        if not uic_input:
+            return
+        try:
+            uic = int(uic_input)
+        except ValueError:
+            print("[ERROR] UIC must be a number.")
+            return
 
     await get_quote(client, uic, asset_type)
 
@@ -114,17 +165,34 @@ async def _handle_order(client: SaxoClient, ctx: dict) -> None:
         print("[INFO] No instruments found.")
         return
 
-    uic_input = (await ainput("  Enter UIC for order (or 'b' to go back): ")).strip()
-    if uic_input.lower() == "b":
-        print("[INFO] Going back to main menu.")
-        return
-    if not uic_input:
-        return
-    try:
-        uic = int(uic_input)
-    except ValueError:
-        print("[ERROR] UIC must be a number.")
-        return
+    is_option = asset_type in ("StockOption", "StockIndexOption")
+
+    if is_option:
+        root_input = (
+            await ainput("  Enter OptionRootId to browse chain (or 'b' to go back): ")
+        ).strip()
+        if root_input.lower() == "b" or not root_input:
+            return
+        try:
+            root_id = int(root_input)
+        except ValueError:
+            print("[ERROR] Must be a number.")
+            return
+        uic = await _pick_option_uic(client, root_id)
+        if uic is None:
+            return
+    else:
+        uic_input = (await ainput("  Enter UIC for order (or 'b' to go back): ")).strip()
+        if uic_input.lower() == "b":
+            print("[INFO] Going back to main menu.")
+            return
+        if not uic_input:
+            return
+        try:
+            uic = int(uic_input)
+        except ValueError:
+            print("[ERROR] UIC must be a number.")
+            return
 
     # 2. Get a quote so the user knows current price
     quote_data = await get_quote(client, uic, asset_type)

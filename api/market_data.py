@@ -41,11 +41,13 @@ async def search_instrument(
     data = resp.json()
     instruments = data.get("Data", [])
 
+    is_option = asset_types in ("StockOption", "StockIndexOption")
+    id_label = "RootId" if is_option else "UIC"
     print(f"[INFO] Instrument search '{keyword}' ({asset_types}): "
           f"{len(instruments)} results")
     for inst in instruments:
         print(
-            f"       UIC={inst.get('Identifier', '?'):>8} | "
+            f"       {id_label}={inst.get('Identifier', '?'):>8} | "
             f"{inst.get('Symbol', '?'):<10} | "
             f"{inst.get('Description', '?'):<40} | "
             f"{inst.get('AssetType', '?')}"
@@ -118,8 +120,35 @@ async def get_option_chain(
     option_space = data.get("OptionSpace", [])
     print(f"[INFO] Option chain for root {option_root_id}: "
           f"{len(option_space)} expiry groups")
-    for group in option_space:
+    for i, group in enumerate(option_space):
         expiry = group.get("Expiry", {}).get("ExpiryDate", "?")
         strikes = group.get("SpecificOptions", [])
-        print(f"       Expiry {expiry}: {len(strikes)} strikes")
+        print(f"  [{i}] Expiry {expiry}: {len(strikes)} strikes")
     return data
+
+
+def list_strikes(option_space: list[dict], expiry_index: int) -> list[dict]:
+    """
+    Print and return the strikes for a given expiry index.
+    Each strike has a Call and/or Put side with its own UIC.
+    """
+    if expiry_index < 0 or expiry_index >= len(option_space):
+        print("[ERROR] Invalid expiry index.")
+        return []
+
+    group = option_space[expiry_index]
+    expiry = group.get("Expiry", {}).get("ExpiryDate", "?")
+    strikes = group.get("SpecificOptions", [])
+    print(f"[INFO] Strikes for expiry {expiry}: {len(strikes)}")
+    for s in strikes:
+        strike_val = s.get("Strike", "?")
+        call = s.get("Call", {})
+        put = s.get("Put", {})
+        call_uic = call.get("Uic", "-")
+        put_uic = put.get("Uic", "-")
+        print(
+            f"       Strike {strike_val:>10} | "
+            f"Call UIC={str(call_uic):>8} | "
+            f"Put  UIC={str(put_uic):>8}"
+        )
+    return strikes
