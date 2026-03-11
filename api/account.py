@@ -64,25 +64,38 @@ async def get_positions(
 ) -> list[dict[str, Any]]:
     """Return open positions (uses /me when no keys given)."""
     if account_key or client_key:
-        params: dict[str, str] = {}
+        params: dict[str, str] = {
+            "FieldGroups": "DisplayAndFormat,PositionBase,PositionView",
+        }
         if account_key:
             params["AccountKey"] = account_key
         if client_key:
             params["ClientKey"] = client_key
         resp = await client.get("/port/v1/positions", params=params)
     else:
-        resp = await client.get("/port/v1/positions/me")
+        resp = await client.get(
+            "/port/v1/positions/me",
+            params={"FieldGroups": "DisplayAndFormat,PositionBase,PositionView"},
+        )
 
     resp.raise_for_status()
     data = resp.json()
     positions = data.get("Data", [])
     print(f"[INFO] Open positions: {len(positions)}")
+    print(f"[INFO] Open positions: {len(positions)}")
     for pos in positions:
-        disp = pos.get("DisplayAndFormat", {})
-        net = pos.get("NetPositionBase", {})
+        disp  = pos.get("DisplayAndFormat", {})
+        base  = pos.get("PositionBase", {})
+        view  = pos.get("PositionView", {})
+        desc  = disp.get("Description") or disp.get("Symbol") or "?"
+        amt   = base.get("Amount", "?")
+        pl    = view.get("ProfitLossOnTrade", base.get("ProfitLossOnTrade", "?"))
+        open_price = base.get("OpenPrice", "?")
+        currency   = disp.get("Currency", "")
         print(
-            f"       {disp.get('Description', '?')} | "
-            f"Amount: {net.get('Amount', '?')} | "
-            f"P/L: {pos.get('PositionBase', {}).get('ProfitLossOnTrade', '?')}"
+            f"       {desc} | "
+            f"Amount: {amt} | "
+            f"Open: {open_price} | "
+            f"P/L: {pl} {currency}"
         )
     return positions

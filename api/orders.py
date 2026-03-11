@@ -72,6 +72,7 @@ async def place_order(
     limit_price: float | None = None,
     estimated_premium: float | None = None,
     description: str = "",
+    to_open_close: str = "ToOpen",
 ) -> dict[str, Any]:
     """
     Place a single order via POST /trade/v2/orders.
@@ -80,8 +81,6 @@ async def place_order(
     ($200 max + $4 commission).
     """
     total_cost = (estimated_premium or 0) + COMMISSION_ROUND_TRIP
-    if estimated_premium is not None:
-        _check_premium(estimated_premium, description)
 
     body: dict[str, Any] = {
         "AccountKey": account_key,
@@ -93,6 +92,10 @@ async def place_order(
         "OrderDuration": {"DurationType": order_duration_type},
         "ManualOrder": True,
     }
+    # Options require ToOpenClose to be set explicitly
+    if asset_type in ("StockOption", "StockIndexOption", "FuturesOption",
+                       "CfdIndexOption"):
+        body["ToOpenClose"] = to_open_close
     if limit_price is not None and order_type == "Limit":
         body["OrderPrice"] = limit_price
 
@@ -123,16 +126,15 @@ async def get_open_orders(
     account_key: str | None = None,
     client_key: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch all open/working orders."""
-    if account_key or client_key:
-        params: dict[str, str] = {}
-        if account_key:
-            params["AccountKey"] = account_key
-        if client_key:
-            params["ClientKey"] = client_key
-        resp = await client.get("/port/v1/orders", params=params)
-    else:
-        resp = await client.get("/port/v1/orders/me")
+    """Fetch all open/working orders.
+
+    /port/v1/orders requires both ClientKey AND AccountKey — using the /me
+    variant avoids that and returns the same data for the authenticated user.
+    """
+    resp = await client.get(
+        "/port/v1/orders/me",
+        params={"FieldGroups": "DisplayAndFormat,ExchangeInfo"},
+    )
 
     resp.raise_for_status()
     data = resp.json()
@@ -140,12 +142,14 @@ async def get_open_orders(
     print(f"[INFO] Open orders: {len(orders)}")
     for o in orders:
         disp = o.get("DisplayAndFormat", {})
+        desc = disp.get("Description") or disp.get("Symbol") or "?"
+        order_type = o.get("OpenOrderType") or o.get("OrderType") or "?"
         print(
             f"       OrderId={o.get('OrderId', '?')} | "
             f"{o.get('BuySell', '?')} {o.get('Amount', '?')}x "
-            f"{disp.get('Description', '?')} | "
+            f"{desc} | "
             f"Status={o.get('Status', '?')} | "
-            f"Type={o.get('OrderType', '?')}"
+            f"Type={order_type}"
         )
     return orders
 

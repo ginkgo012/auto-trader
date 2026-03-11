@@ -81,9 +81,16 @@ async def get_quote(
     client: SaxoClient,
     uic: int,
     asset_type: str = "Stock",
+    *,
+    _max_retries: int = 3,
+    _retry_delay: float = 0.5,
 ) -> dict[str, Any]:
     """
     Fetch a snapshot quote (info-price) for a single UIC.
+
+    Saxo uses lazy initialization — the first request for a given UIC may
+    return an empty Quote (no Bid/Ask).  Retry up to *_max_retries* times
+    with *_retry_delay* seconds between attempts.
 
     Returns the full InfoPrice response including Quote sub-object.
     """
@@ -92,9 +99,19 @@ async def get_quote(
         "AssetType": asset_type,
         "FieldGroups": "DisplayAndFormat,InstrumentPriceDetails,Quote",
     }
-    resp = await client.get("/trade/v1/infoprices", params=params)
-    resp.raise_for_status()
-    data = resp.json()
+
+    data: dict[str, Any] = {}
+    for attempt in range(1, _max_retries + 1):
+        resp = await client.get("/trade/v1/infoprices", params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        quote = data.get("Quote", {})
+        if quote.get("Bid") is not None or quote.get("Ask") is not None:
+            break
+        if attempt < _max_retries:
+            print(f"[INFO] Quote not ready (attempt {attempt}/{_max_retries}), "
+                  f"retrying in {_retry_delay}s …")
+            await asyncio.sleep(_retry_delay)
 
     quote = data.get("Quote", {})
     disp = data.get("DisplayAndFormat", {})
